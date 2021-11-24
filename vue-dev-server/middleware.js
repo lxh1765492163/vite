@@ -1,11 +1,19 @@
+//  转换单文件组件，最终返回浏览器能够识别的文件
 const vueCompiler = require('@vue/component-compiler')
 const fs = require('fs')
+// fs.stat 检查文件是否存在, 存在返回文件信息
 const stat = require('util').promisify(fs.stat)
 const root = process.cwd()
 const path = require('path')
 const parseUrl = require('parseurl')
+
+// 将对应文件下的三方依赖路径修改（路径前添加/__modules）也就是针对 npm 包转换。
 const { transformModuleImports } = require('./transformModuleImports')
-const { loadPkg } = require('./loadPkg')
+
+// 加载包（这里只支持Vue文件）
+const { loadPkg } = require('./loadPkg');
+
+// 这个函数主要作用：根据请求获取文件资源。返回文件路径 filepath、资源 source、和更新时间 updateTime
 const { readSource } = require('./readSource')
 
 const defaultOptions = {
@@ -24,6 +32,7 @@ const vueMiddleware = (options = defaultOptions) => {
     })
   }
 
+  // 将vue文件 转换成浏览器支持的文件
   const compiler = vueCompiler.createDefaultCompiler()
 
   function send(res, source, mime) {
@@ -31,7 +40,7 @@ const vueMiddleware = (options = defaultOptions) => {
     res.end(source)
   }
 
-  function injectSourceMapToBlock (block, lang) {
+  function injectSourceMapToBlock(block, lang) {
     const map = Base64.toBase64(
       JSON.stringify(block.map)
     )
@@ -49,15 +58,16 @@ const vueMiddleware = (options = defaultOptions) => {
     }
   }
 
-  function injectSourceMapToScript (script) {
+  function injectSourceMapToScript(script) {
     return injectSourceMapToBlock(script, 'js')
   }
 
-  function injectSourceMapsToStyles (styles) {
+  function injectSourceMapsToStyles(styles) {
     return styles.map(style => injectSourceMapToBlock(style, 'css'))
   }
-  
-  async function tryCache (key, checkUpdateTime = true) {
+
+  // 尝试从缓存中获取文件
+  async function tryCache(key, checkUpdateTime = true) {
     const data = cache.get(key)
 
     if (checkUpdateTime) {
@@ -69,7 +79,7 @@ const vueMiddleware = (options = defaultOptions) => {
     return data
   }
 
-  function cacheData (key, data, updateTime) {
+  function cacheData(key, data, updateTime) {
     const old = cache.peek(key)
 
     if (old != data) {
@@ -79,7 +89,7 @@ const vueMiddleware = (options = defaultOptions) => {
     } else return false
   }
 
-  async function bundleSFC (req) {
+  async function bundleSFC(req) {
     const { filepath, source, updateTime } = await readSource(req)
     const descriptorResult = compiler.compileToDescriptor(filepath, source)
     const assembledResult = vueCompiler.assemble(compiler, filepath, {
@@ -91,7 +101,7 @@ const vueMiddleware = (options = defaultOptions) => {
   }
 
   return async (req, res, next) => {
-    if (req.path.endsWith('.vue')) {      
+    if (req.path.endsWith('.vue')) {
       const key = parseUrl(req).pathname
       let out = await tryCache(key)
 
@@ -101,16 +111,22 @@ const vueMiddleware = (options = defaultOptions) => {
         out = result
         cacheData(key, out, result.updateTime)
       }
-      
+
       send(res, out.code, 'application/javascript')
     } else if (req.path.endsWith('.js')) {
       const key = parseUrl(req).pathname
       let out = await tryCache(key)
 
       if (!out) {
+
+        // 根据请求的文件 ， 加载对应的文件
         // transform import statements
         const result = await readSource(req)
+
+        // 将对应文件下的三方依赖路径修改（路径前添加/__modules）
         out = transformModuleImports(result.source)
+
+        // 
         cacheData(key, out, result.updateTime)
       }
 
